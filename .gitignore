@@ -1,0 +1,19 @@
+# 秘密鍵・証明書（certs.sh で手元に作る）
+certs/
+# 実行時の状態・出力
+state.json
+state-apigw.json
+cdk-outputs.json
+# Python / Node
+.venv/
+__pycache__/
+cdk/node_modules/
+cdk/cdk.out/
+cdk/*.js
+cdk/*.d.ts
+# boto3 1.43.108未満向けの回避用（1.43.108以降では不要）
+models/
+# その他
+*.log
+.DS_Store
+cdk/cdk.context.json
