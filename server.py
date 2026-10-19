@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.12"
+# requires-python = ">=3.14,<3.15"
 # dependencies = ["mcp==1.30.0"]
 # ///
 import os
