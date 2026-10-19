@@ -98,7 +98,7 @@ UNIT`,
     });
     server.node.addDependency(serverFiles);
 
-    // VPC内だけで引けるドメイン
+    // VPC内だけで名前解決できるドメイン
     const zone = new route53.PrivateHostedZone(this, 'Zone', { zoneName: 'internal.example.com', vpc });
     new route53.ARecord(this, 'McpRecord', {
       zone,

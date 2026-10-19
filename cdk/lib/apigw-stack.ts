@@ -93,7 +93,7 @@ export class ApigwStack extends cdk.Stack {
       accessAssociationSourceType: 'VPCE',
     });
 
-    // VPC内だけで引けるドメインを、VPCエンドポイントに向ける
+    // VPC内だけで名前解決できるドメインを、VPCエンドポイントに向ける
     const zone = new route53.PrivateHostedZone(this, 'Zone', { zoneName: 'internal.example.com', vpc });
     new route53.ARecord(this, 'ApiRecord', {
       zone,
