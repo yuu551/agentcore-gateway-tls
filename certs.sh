@@ -4,7 +4,7 @@ set -euo pipefail
 HOST=mcp.internal.example.com
 mkdir -p certs && cd certs
 
-# 社内CA：basicConstraintsをCA:TRUEにして自己署名する
+# プライベートCA：basicConstraintsをCA:TRUEにして自己署名する
 openssl genrsa -out ca.key 2048
 openssl req -x509 -new -key ca.key -sha256 -days 3650 \
   -subj "/CN=Demo Private CA" \

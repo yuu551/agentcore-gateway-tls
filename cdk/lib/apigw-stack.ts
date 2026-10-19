@@ -74,7 +74,7 @@ export class ApigwStack extends cdk.Stack {
       { methodResponses: [{ statusCode: '200' }] },
     );
 
-    // 社内CAで署名した証明書を付けたプライベートなカスタムドメイン
+    // プライベートCAで署名した証明書を付けたプライベートなカスタムドメイン
     const domain = new apigw.CfnDomainNameV2(this, 'PrivateDomain', {
       domainName: DOMAIN,
       certificateArn: props.certificateArn,
@@ -93,7 +93,7 @@ export class ApigwStack extends cdk.Stack {
       accessAssociationSourceType: 'VPCE',
     });
 
-    // VPC内だけで引ける社内ドメインを、VPCエンドポイントに向ける
+    // VPC内だけで引けるドメインを、VPCエンドポイントに向ける
     const zone = new route53.PrivateHostedZone(this, 'Zone', { zoneName: 'internal.example.com', vpc });
     new route53.ARecord(this, 'ApiRecord', {
       zone,
@@ -113,7 +113,7 @@ export class ApigwStack extends cdk.Stack {
       destinationKeyPrefix: 'ca',
       sources: [s3deploy.Source.asset(path.join(__dirname, '../../certs'), { exclude: ['*', '!ca.pem'] })],
     });
-    // OpenAPIターゲットに渡すAPIの定義（serversに社内ドメインを書く）
+    // OpenAPIターゲットに渡すAPIの定義（serversにカスタムドメインを書く）
     new s3deploy.BucketDeployment(this, 'OpenApi', {
       destinationBucket: bucket,
       destinationKeyPrefix: 'openapi',

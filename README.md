@@ -1,6 +1,6 @@
 # agentcore-gateway-tls
 
-Amazon Bedrock AgentCore Gateway のプライベート CA 対応（`certificateConfigurations`）を検証したコードです。社内 CA で署名した証明書を使う VPC 内のサーバーに、Gateway から VPC Lattice 経由で接続します。
+Amazon Bedrock AgentCore Gateway のプライベート CA 対応（`certificateConfigurations`）を検証したコードです。プライベート CA で署名した証明書を使う VPC 内のサーバーに、Gateway から VPC Lattice 経由で接続します。
 
 - 本編：EC2 上の MCP サーバー（`mcp.internal.example.com`）を MCP サーバーターゲットとして登録
 - おまけ：プライベートな API Gateway のカスタムドメイン（`api.internal.example.com`）を OpenAPI ターゲットとして登録
@@ -9,7 +9,7 @@ Amazon Bedrock AgentCore Gateway のプライベート CA 対応（`certificateC
 
 | パス | 内容 |
 | --- | --- |
-| `certs.sh` | 検証用の社内 CA とサーバー証明書を `certs/` に作る |
+| `certs.sh` | 検証用のプライベート CA とサーバー証明書を `certs/` に作る |
 | `server.py` | EC2 で動かす MCP サーバー（HTTPS 443） |
 | `openapi/private-api.json` | おまけの OpenAPI ターゲットに渡す API 定義 |
 | `cdk/` | AWS CDK アプリ。`GwTlsEc2`（本編）と `GwTlsApigw`（おまけ）の 2 スタック。Gateway 本体まで作る |
@@ -35,7 +35,7 @@ out() { aws cloudformation describe-stacks --region ap-northeast-1 --stack-name 
 GW_ID=$(out GatewayId); GW_URL=$(out GatewayUrl); PE=$(out PrivateEndpoint); B=$(out BucketName)
 ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 
-# ターゲットの登録（社内 CA の PEM を指定）
+# ターゲットの登録（プライベート CA の PEM を指定）
 aws bedrock-agentcore-control create-gateway-target --region ap-northeast-1 \
   --gateway-identifier "$GW_ID" --name with-ca \
   --target-configuration '{"mcp": {"mcpServer": {"endpoint": "https://mcp.internal.example.com/mcp"}}}' \
