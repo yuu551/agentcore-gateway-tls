@@ -2,6 +2,7 @@ import * as path from 'path';
 import * as cdk from 'aws-cdk-lib/core';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as apigw from 'aws-cdk-lib/aws-apigateway';
+import * as agentcore from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as targets from 'aws-cdk-lib/aws-route53-targets';
@@ -112,8 +113,14 @@ export class ApigwStack extends cdk.Stack {
       destinationKeyPrefix: 'ca',
       sources: [s3deploy.Source.asset(path.join(__dirname, '../../certs'), { exclude: ['*', '!ca.pem'] })],
     });
+    // OpenAPIターゲットに渡すAPIの定義（serversに社内ドメインを書く）
+    new s3deploy.BucketDeployment(this, 'OpenApi', {
+      destinationBucket: bucket,
+      destinationKeyPrefix: 'openapi',
+      sources: [s3deploy.Source.asset(path.join(__dirname, '../../openapi'))],
+    });
 
-    // Gatewayのサービスロール（CA証明書の読み取りだけ）
+    // Gatewayのサービスロール（CA証明書とOpenAPI定義の読み取り）
     const gatewayRole = new iam.Role(this, 'GatewayRole', {
       assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com', {
         conditions: {
@@ -123,11 +130,29 @@ export class ApigwStack extends cdk.Stack {
       }),
     });
     bucket.grantRead(gatewayRole, 'ca/*');
+    bucket.grantRead(gatewayRole, 'openapi/*');
 
-    new cdk.CfnOutput(this, 'VpcId', { value: vpc.vpcId });
-    new cdk.CfnOutput(this, 'SubnetIds', { value: vpc.isolatedSubnets.map((s) => s.subnetId).join(',') });
-    new cdk.CfnOutput(this, 'LatticeSgId', { value: latticeSg.securityGroupId });
-    new cdk.CfnOutput(this, 'GatewayRoleArn', { value: gatewayRole.roleArn });
-    new cdk.CfnOutput(this, 'CaPemUri', { value: `s3://${bucket.bucketName}/ca/ca.pem` });
+    // IAM認証のMCPゲートウェイ（ターゲットはCLIで登録する）
+    const gateway = new agentcore.CfnGateway(this, 'Gateway', {
+      name: 'private-tls-apigw',
+      protocolType: 'MCP',
+      authorizerType: 'AWS_IAM',
+      roleArn: gatewayRole.roleArn,
+    });
+
+    // ターゲット登録時に --private-endpoint へそのまま渡すJSON
+    const privateEndpoint = {
+      managedVpcResource: {
+        vpcIdentifier: vpc.vpcId,
+        subnetIds: vpc.isolatedSubnets.map((s) => s.subnetId),
+        endpointIpAddressType: 'IPV4',
+        securityGroupIds: [latticeSg.securityGroupId],
+      },
+    };
+
+    new cdk.CfnOutput(this, 'GatewayId', { value: gateway.attrGatewayIdentifier });
+    new cdk.CfnOutput(this, 'GatewayUrl', { value: gateway.attrGatewayUrl });
+    new cdk.CfnOutput(this, 'PrivateEndpoint', { value: this.toJsonString(privateEndpoint) });
+    new cdk.CfnOutput(this, 'BucketName', { value: bucket.bucketName });
   }
 }

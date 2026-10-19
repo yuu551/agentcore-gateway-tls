@@ -1,0 +1,14 @@
+{
+  "openapi": "3.0.1",
+  "info": {"title": "private-api", "version": "1.0"},
+  "servers": [{"url": "https://api.internal.example.com"}],
+  "paths": {
+    "/hello": {
+      "get": {
+        "operationId": "getHello",
+        "description": "プライベートAPI Gatewayからあいさつを返す",
+        "responses": {"200": {"description": "OK"}}
+      }
+    }
+  }
+}

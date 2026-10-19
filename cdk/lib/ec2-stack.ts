@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as cdk from 'aws-cdk-lib/core';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as agentcore from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as s3 from 'aws-cdk-lib/aws-s3';
@@ -49,16 +50,11 @@ export class Ec2Stack extends cdk.Stack {
         s3deploy.Source.asset(path.join(__dirname, '../..'), { exclude: ['*', '!server.py'] }),
       ],
     });
-    // ca/ には正しいCAと、失敗ケース用のPEM（not-found.pem は置かない）
+    // Gatewayが参照するCA証明書のPEM
     new s3deploy.BucketDeployment(this, 'CaFiles', {
       destinationBucket: bucket,
       destinationKeyPrefix: 'ca',
-      sources: [
-        s3deploy.Source.data('private-ca.pem', read('ca.pem')),
-        s3deploy.Source.data('leaf.pem', read('server.pem')),
-        s3deploy.Source.data('other-ca.pem', read('other-ca.pem')),
-        s3deploy.Source.data('expired-ca.pem', read('expired-ca.pem')),
-      ],
+      sources: [s3deploy.Source.data('private-ca.pem', read('ca.pem'))],
     });
 
     // MCPサーバー（起動時にS3から証明書とコードを取得し、systemdで起動する）
@@ -102,16 +98,14 @@ UNIT`,
     });
     server.node.addDependency(serverFiles);
 
-    // VPC内だけで引ける社内ドメイン。ホスト名の不一致を確かめるために、同じサーバーを指す別名も用意する
+    // VPC内だけで引ける社内ドメイン
     const zone = new route53.PrivateHostedZone(this, 'Zone', { zoneName: 'internal.example.com', vpc });
-    for (const name of ['mcp', 'other']) {
-      new route53.ARecord(this, `${name}Record`, {
-        zone,
-        recordName: name,
-        target: route53.RecordTarget.fromIpAddresses(server.instancePrivateIp),
-        ttl: cdk.Duration.seconds(60),
-      });
-    }
+    new route53.ARecord(this, 'McpRecord', {
+      zone,
+      recordName: 'mcp',
+      target: route53.RecordTarget.fromIpAddresses(server.instancePrivateIp),
+      ttl: cdk.Duration.seconds(60),
+    });
 
     // Gatewayのサービスロール（CA証明書の読み取り）
     const gatewayRole = new iam.Role(this, 'GatewayRole', {
@@ -130,10 +124,27 @@ UNIT`,
       }),
     );
 
-    new cdk.CfnOutput(this, 'VpcId', { value: vpc.vpcId });
-    new cdk.CfnOutput(this, 'SubnetIds', { value: vpc.privateSubnets.map((s) => s.subnetId).join(',') });
-    new cdk.CfnOutput(this, 'LatticeSgId', { value: latticeSg.securityGroupId });
-    new cdk.CfnOutput(this, 'GatewayRoleArn', { value: gatewayRole.roleArn });
+    // IAM認証のMCPゲートウェイ（ターゲットはCLIで登録する）
+    const gateway = new agentcore.CfnGateway(this, 'Gateway', {
+      name: 'private-tls-demo',
+      protocolType: 'MCP',
+      authorizerType: 'AWS_IAM',
+      roleArn: gatewayRole.roleArn,
+    });
+
+    // ターゲット登録時に --private-endpoint へそのまま渡すJSON
+    const privateEndpoint = {
+      managedVpcResource: {
+        vpcIdentifier: vpc.vpcId,
+        subnetIds: vpc.privateSubnets.map((s) => s.subnetId),
+        endpointIpAddressType: 'IPV4',
+        securityGroupIds: [latticeSg.securityGroupId],
+      },
+    };
+
+    new cdk.CfnOutput(this, 'GatewayId', { value: gateway.attrGatewayIdentifier });
+    new cdk.CfnOutput(this, 'GatewayUrl', { value: gateway.attrGatewayUrl });
+    new cdk.CfnOutput(this, 'PrivateEndpoint', { value: this.toJsonString(privateEndpoint) });
     new cdk.CfnOutput(this, 'BucketName', { value: bucket.bucketName });
     new cdk.CfnOutput(this, 'ServerInstanceId', { value: server.instanceId });
   }

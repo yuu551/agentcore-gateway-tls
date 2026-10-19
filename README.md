@@ -9,40 +9,51 @@ Amazon Bedrock AgentCore Gateway のプライベート CA 対応（`certificateC
 
 | パス | 内容 |
 | --- | --- |
-| `certs.sh` | 検証用の社内 CA・サーバー証明書・失敗ケース用の証明書を `certs/` に作る |
+| `certs.sh` | 検証用の社内 CA とサーバー証明書を `certs/` に作る |
 | `server.py` | EC2 で動かす MCP サーバー（HTTPS 443） |
-| `cdk/` | AWS CDK アプリ。`GwTlsEc2`（本編）と `GwTlsApigw`（おまけ）の 2 スタック |
-| `gw.py` | 本編の Gateway・ターゲットを boto3 で操作する |
-| `gw_apigw.py` | おまけの Gateway・ターゲットを boto3 で操作する |
+| `openapi/private-api.json` | おまけの OpenAPI ターゲットに渡す API 定義 |
+| `cdk/` | AWS CDK アプリ。`GwTlsEc2`（本編）と `GwTlsApigw`（おまけ）の 2 スタック。Gateway 本体まで作る |
 
-CDK の `CfnGatewayTarget`（aws-cdk-lib 2.273.0）にはまだ `certificateConfigurations` がないため、Gateway とターゲットは boto3 で作ります。
+CloudFormation の `AWS::BedrockAgentCore::GatewayTarget` がまだ `CertificateConfigurations` に対応していないため、ターゲットは AWS CLI で登録します。
 
 ## 前提
 
 - リージョン：ap-northeast-1（CDK ブートストラップ済み）
-- Python 3.12 + uv、boto3 1.43.108 以降
 - Node.js + pnpm
-- OpenSSL 3.4 以降（期限切れ CA の作成に `-not_before` / `-not_after` を使う）
+- AWS CLI 2.37.13 以降（`--certificate-configurations` 対応版）
+- curl（`--aws-sigv4` 対応版）
 
 ## 使い方（本編）
 
 ```bash
-uv sync
 (cd cdk && pnpm install)
 ./certs.sh
-
-# VPC・EC2・プライベートホストゾーン・S3・Gateway のロールを作る
 (cd cdk && pnpm cdk deploy GwTlsEc2)
-B=$(aws cloudformation describe-stacks --region ap-northeast-1 --stack-name GwTlsEc2 \
-  --query "Stacks[0].Outputs[?OutputKey=='BucketName'].OutputValue" --output text)
 
-uv run gw.py create-gateway
-uv run gw.py create-target with-ca https://mcp.internal.example.com/mcp s3://$B/ca/private-ca.pem
-uv run gw.py get-target with-ca
-uv run gw.py tools-call with-ca___whoami
+out() { aws cloudformation describe-stacks --region ap-northeast-1 --stack-name GwTlsEc2 \
+  --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
+GW_ID=$(out GatewayId); GW_URL=$(out GatewayUrl); PE=$(out PrivateEndpoint); B=$(out BucketName)
+ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 
-# 後片付け
-uv run gw.py cleanup
+# ターゲットの登録（社内 CA の PEM を指定）
+aws bedrock-agentcore-control create-gateway-target --region ap-northeast-1 \
+  --gateway-identifier "$GW_ID" --name with-ca \
+  --target-configuration '{"mcp": {"mcpServer": {"endpoint": "https://mcp.internal.example.com/mcp"}}}' \
+  --private-endpoint "$PE" \
+  --certificate-configurations "[{\"s3\": {\"uri\": \"s3://$B/ca/private-ca.pem\", \"bucketOwnerAccountId\": \"$ACCOUNT\"}}]"
+
+# READY になったらツールを呼び出す
+eval "$(aws configure export-credentials --format env)"
+curl -s "$GW_URL" --aws-sigv4 "aws:amz:ap-northeast-1:bedrock-agentcore" \
+  --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" -H "x-amz-security-token: $AWS_SESSION_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "with-ca___whoami", "arguments": {}}}'
+
+# 後片付け（ターゲット → スタックの順）
+for t in $(aws bedrock-agentcore-control list-gateway-targets --region ap-northeast-1 \
+    --gateway-identifier "$GW_ID" --query 'items[].targetId' --output text); do
+  aws bedrock-agentcore-control delete-gateway-target --region ap-northeast-1 --gateway-identifier "$GW_ID" --target-id "$t"; sleep 5
+done
 (cd cdk && pnpm cdk destroy GwTlsEc2)
 ```
 
@@ -54,12 +65,19 @@ CERT_ARN=$(aws acm import-certificate --region ap-northeast-1 \
   --certificate-chain fileb://certs/ca.pem --query CertificateArn --output text)
 (cd cdk && pnpm cdk deploy GwTlsApigw -c certificateArn=$CERT_ARN)
 
-uv run gw_apigw.py create-gateway
-uv run gw_apigw.py create-target with-ca with-ca
-uv run gw_apigw.py tools-call with-ca___getHello
+out() { aws cloudformation describe-stacks --region ap-northeast-1 --stack-name GwTlsApigw \
+  --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
+GW_ID=$(out GatewayId); GW_URL=$(out GatewayUrl); PE=$(out PrivateEndpoint); B=$(out BucketName)
 
-# 後片付け
-uv run gw_apigw.py cleanup
+aws bedrock-agentcore-control create-gateway-target --region ap-northeast-1 \
+  --gateway-identifier "$GW_ID" --name with-ca \
+  --target-configuration "{\"mcp\": {\"openApiSchema\": {\"s3\": {\"uri\": \"s3://$B/openapi/private-api.json\"}}}}" \
+  --private-endpoint "$PE" \
+  --certificate-configurations "[{\"s3\": {\"uri\": \"s3://$B/ca/ca.pem\", \"bucketOwnerAccountId\": \"$ACCOUNT\"}}]"
+
+# ツールの呼び出しは本編と同じ curl で、ツール名を with-ca___getHello にする
+
+# 後片付け：ターゲットを削除してから
 (cd cdk && pnpm cdk destroy GwTlsApigw -c certificateArn=$CERT_ARN)
 aws acm delete-certificate --region ap-northeast-1 --certificate-arn $CERT_ARN
 ```
